@@ -33,7 +33,7 @@ class Git(object):
         merge_base = subprocess.check_output(
             "git merge-base %s %s" % (old_commit_id, new_commit_id),
             shell=True,
-        )
+        ).strip()
         return old_commit_id != merge_base
 
 
