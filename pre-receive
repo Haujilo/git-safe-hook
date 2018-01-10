@@ -22,6 +22,14 @@ class ProtectMasterBranchError(RejectError):
     msg = "branch master is protected, no one can delete or force push"
 
 
+class ProtectReleaseTagError(RejectError):
+
+    code = 2
+    msg = "release tag is protected, no one can delete or force push"
+    TAGGER_EMAIL = subprocess.check_output(
+        'git config user.email', shell=True).strip()
+
+
 class Git(object):
 
     @staticmethod
@@ -36,10 +44,19 @@ class Git(object):
         ).strip()
         return old_commit_id != merge_base
 
+    @staticmethod
+    def is_someone_tag(ref, someone_email=ProtectReleaseTagError.TAGGER_EMAIL):
+        output = subprocess.check_output(
+            "git for-each-ref --format='%%(objecttype) %%(taggeremail)' %s" % (
+                ref, ),
+            shell=True,
+        ).split()
+        if output[0] != 'tag':
+            return False
+        return someone_email == output[1][1:-1]
 
-def protect_master_branch(ref, old_commit_id, new_commit_id):
-    if ref != 'refs/heads/master':
-        return
+
+def protect_master_branch(old_commit_id, new_commit_id):
     if Git.is_null_commit(old_commit_id):
         return
     if Git.is_null_commit(new_commit_id):
@@ -48,11 +65,22 @@ def protect_master_branch(ref, old_commit_id, new_commit_id):
         raise ProtectMasterBranchError()
 
 
+def protect_release_tag(old_commit_id, new_commit_id, ref):
+    if Git.is_null_commit(old_commit_id):
+        return
+    if Git.is_null_commit(new_commit_id) or old_commit_id != new_commit_id:
+        if Git.is_someone_tag(ref):
+            raise ProtectReleaseTagError()
+
+
 def main():
     try:
         for line in fileinput.input():
             old_commit_id, new_commit_id, ref = line.split()
-            protect_master_branch(ref, old_commit_id, new_commit_id)
+            if ref == 'refs/heads/master':
+                protect_master_branch(old_commit_id, new_commit_id)
+            elif ref.startswith('refs/tags/'):
+                protect_release_tag(old_commit_id, new_commit_id, ref)
     except RejectError as error:
         error.reject()
 
