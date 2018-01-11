@@ -26,11 +26,12 @@ class ProtectReleaseTagError(RejectError):
 
     code = 2
     msg = "release tag is protected, no one can delete or force push"
-    TAGGER_EMAIL = subprocess.check_output(
-        'git config user.email', shell=True).strip()
 
 
 class Git(object):
+
+    DEPLOYER_TAGGER_EMAIL = subprocess.check_output(
+        'git config --system user.email', shell=True).strip()
 
     @staticmethod
     def is_null_commit(commit_id):
@@ -45,7 +46,7 @@ class Git(object):
         return old_commit_id != merge_base
 
     @staticmethod
-    def is_someone_tag(ref, someone_email=ProtectReleaseTagError.TAGGER_EMAIL):
+    def is_someone_tag(ref, someone_email=DEPLOYER_TAGGER_EMAIL):
         output = subprocess.check_output(
             "git for-each-ref --format='%%(objecttype) %%(taggeremail)' %s" % (
                 ref, ),
