@@ -1,9 +1,14 @@
 #! /usr/bin/env python
+# -*- coding: utf-8 -*-
 
+from __future__ import absolute_import, unicode_literals
+
+import re
 import os
 import sys
 import fileinput
 import subprocess
+from functools import partial
 
 
 class RejectError(Exception):
@@ -20,13 +25,26 @@ class RejectError(Exception):
 class ProtectMasterBranchError(RejectError):
 
     code = 1
-    msg = "branch master is protected, no one can delete or force push"
+    msg = "The master branch is protected, no one can delete or force push"
 
 
 class ProtectReleaseTagError(RejectError):
 
     code = 2
-    msg = "release tag is protected, no one can delete or force push"
+    msg = "The release tag is protected, no one can delete or force push"
+
+
+class ReleaseBranchNotCheckoutFromMasterError(RejectError):
+
+    code = 3
+    msg = "The release branch and the master branch must have a merge base"
+
+
+class ReleaseBranchTagsNotMergeToMasterError(RejectError):
+
+    code = 4
+    msg = ("The release branch tagged, no one can delete or force push "
+           "except that you merge it to the master branch")
 
 
 class Git(object):
@@ -41,14 +59,80 @@ class Git(object):
 
     @staticmethod
     def is_force_push(old_commit_id, new_commit_id):
-        merge_base = subprocess.check_output(
-            "git merge-base %s %s" % (old_commit_id, new_commit_id),
-            shell=True,
-        ).strip()
-        return old_commit_id != merge_base
+        try:
+            merge_base = subprocess.check_output(
+                "git merge-base %s %s" % (old_commit_id, new_commit_id),
+                shell=True,
+            ).strip()
+            return old_commit_id != merge_base
+        except subprocess.CalledProcessError:
+            return True
 
     @staticmethod
-    def is_someone_tag(ref, someone_email=DEPLOYER_TAGGER_EMAIL):
+    def get_merge_base_commit(ref1, ref2):
+        return subprocess.check_output(
+            "git merge-base %s %s" % (ref1, ref2),
+            shell=True,
+        ).strip()
+
+    @classmethod
+    def is_branch_checkout_from_other_branch(
+            cls, branch_ref, other_branch_ref):
+        try:
+            subprocess.check_output(
+                "git merge-base %s %s" % (branch_ref, other_branch_ref),
+                shell=True,
+            )
+            return True
+        except subprocess.CalledProcessError:
+            return False
+
+    @classmethod
+    def is_branch_checkout_from_master(cls, branch_ref):
+        return cls.is_branch_checkout_from_other_branch(
+            branch_ref, 'refs/heads/master')
+
+    @classmethod
+    def is_branch_merged_to_other_branch(cls, branch_ref, other_branch_ref):
+        merge_base = subprocess.check_output(
+            "git merge-base %s %s" % (branch_ref, other_branch_ref),
+            shell=True,
+        ).strip()
+        branch_last_commit_id = subprocess.check_output(
+            "git rev-parse %s" % (branch_ref, ),
+            shell=True,
+        ).strip()
+        return merge_base == branch_last_commit_id
+
+    @classmethod
+    def is_branch_merged_to_master(cls, branch_ref):
+        return cls.is_branch_merged_to_other_branch(
+            branch_ref, 'refs/heads/master')
+
+    @classmethod
+    def find_someone_last_tag_commit(
+            cls, old_commit_id, new_commit_id, someone_email):
+        output = subprocess.check_output(
+            "git log --pretty='%%H %%d' --decorate=full %s..%s" %
+            (old_commit_id, new_commit_id),
+            shell=True).splitlines()
+        regex = re.compile(r'(refs/tags/.+?)[,\)]')
+        for line in filter(lambda item: 'refs/tags/' in item, output):
+            commit_id, tags = line.split(' ', 1)
+            tags = regex.findall(tags)
+            for tag in tags:
+                if cls.is_someone_tag(tag, someone_email):
+                    return commit_id
+        return None
+
+    @classmethod
+    def find_deployer_last_tag_commit(cls, old_commit_id, new_commit_id):
+        return cls.find_someone_last_tag_commit(
+            old_commit_id, new_commit_id,
+            someone_email=cls.DEPLOYER_TAGGER_EMAIL)
+
+    @classmethod
+    def is_someone_tag(cls, ref, someone_email):
         output = subprocess.check_output(
             "git for-each-ref --format='%%(objecttype) %%(taggeremail)' %s" % (
                 ref, ),
@@ -57,6 +141,10 @@ class Git(object):
         if output[0] != 'tag':
             return False
         return someone_email == output[1][1:-1]
+
+    @classmethod
+    def is_deployer_tag(cls, ref):
+        return cls.is_someone_tag(ref, cls.DEPLOYER_TAGGER_EMAIL)
 
 
 def protect_master_branch(old_commit_id, new_commit_id):
@@ -72,8 +160,24 @@ def protect_release_tag(old_commit_id, new_commit_id, ref):
     if Git.is_null_commit(old_commit_id):
         return
     if Git.is_null_commit(new_commit_id) or old_commit_id != new_commit_id:
-        if Git.is_someone_tag(ref):
+        if Git.is_deployer_tag(ref):
             raise ProtectReleaseTagError()
+
+
+def protect_release_branch(old_commit_id, new_commit_id, ref):
+    if Git.is_null_commit(old_commit_id):
+        if Git.is_branch_checkout_from_master(new_commit_id):
+            return
+        else:
+            raise ReleaseBranchNotCheckoutFromMasterError()
+    if Git.is_null_commit(new_commit_id) or Git.is_force_push(
+            old_commit_id, new_commit_id):
+        last_deployer_tag_commit_id = Git.find_deployer_last_tag_commit(
+            Git.get_merge_base_commit(ref, 'refs/heads/master'), ref)
+        if not last_deployer_tag_commit_id:
+            return
+        if not Git.is_branch_merged_to_master(last_deployer_tag_commit_id):
+            raise ReleaseBranchTagsNotMergeToMasterError()
 
 
 def main():
@@ -86,8 +190,11 @@ def main():
                 protect_master_branch(old_commit_id, new_commit_id)
             elif ref.startswith('refs/tags/'):
                 protect_release_tag(old_commit_id, new_commit_id, ref)
+            elif ref.startswith('refs/heads/release/'):
+                protect_release_branch(old_commit_id, new_commit_id, ref)
     except RejectError as error:
         error.reject()
 
 
-main()
+if __name__ == '__main__':
+    main()

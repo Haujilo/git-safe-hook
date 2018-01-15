@@ -8,4 +8,4 @@
 
 * 保护 master 分支，master 分支不允许强制推送，不允许删除。
 * 保护发布版本的 tag 不被删除改写，保护 tag 对应的 commit 不被删除改写。
-* 保护发布分支（release/{版本号}），发布分支存在没合并到 master 的发布 tag 对应的 commit，不允许删除和改写。
+* 保护发布分支（release/{版本号}），发布分支必须和 master 分支有一个公共的基线，发布分支存在没合并到 master 的发布 tag 对应的 commit，不允许删除和改写。
