@@ -118,6 +118,62 @@ class TestGitPreReceiveHook(unittest.TestCase):
         shell('git tag -a 1.0.0 -m "1.0.0" master')
         self.assertEqual(shell('git push -f --tags')[0], 1)
 
+    def test_protect_release_branch(self):
+        self._create_and_clone_git_repo('test3')
+        open('a', 'w').close()
+        shell('git add a && git commit -m "a" && git push')
+
+        # Nomal Push
+        shell('git checkout -b release/1.0.0')
+        self.assertEqual(
+            shell('git push --set-upstream origin release/1.0.0')[0], 0)
+        open('b', 'w').close()
+        shell('git add b && git commit -m "b"')
+        self.assertEqual(shell('git push')[0], 0)
+
+        # Nomal Delete
+        self.assertEqual(
+            shell('git push -d origin release/1.0.0')[0], 0)
+
+        # Tag A Release Branch
+        self.assertEqual(shell('git push')[0], 0)
+        shell('git config --local user.name %s' % self.git_user_name)
+        shell('git config --local user.email %s' % self.git_user_email)
+        shell('git tag -a 1.0.0 -m "1.0.0" release/1.0.0')
+        self.assertEqual(shell('git push --tags')[0], 0)
+
+        # Delete Tagged Release Branch
+        self.assertEqual(
+            shell('git push -d origin release/1.0.0')[0], 1)
+        shell('git checkout master && git merge 1.0.0 && git push')
+        self.assertEqual(
+            shell('git push -d origin release/1.0.0')[0], 0)
+
+        # Tag Other Release Branch
+        shell('git checkout -b release/1.0.1 master')
+        open('c', 'w').close()
+        shell('git add c && git commit -m "c"')
+        shell('git push --set-upstream origin release/1.0.1')
+        shell('git tag -a 1.0.1 -m "1.0.1" release/1.0.1')
+        self.assertEqual(shell('git push --tags')[0], 0)
+
+        # Force Push
+        shell('git checkout -b branch1 master')
+        open('d', 'w').close()
+        shell('git add d && git commit -m "d"')
+        self.assertEqual(
+            shell('git push -f origin branch1:release/1.0.1')[0], 1)
+        shell('git checkout master && git merge 1.0.1 && git push')
+        self.assertEqual(
+            shell('git push -f origin branch1:release/1.0.1')[0], 0)
+
+        # Release Branch Not Checkout From Master Branch
+        shell('git checkout --orphan release/0.1.0 && git rm -r --cached .')
+        open('aa', 'w').close()
+        shell('git add aa && git commit -m "aa"')
+        self.assertEqual(
+            shell('git push --set-upstream origin release/0.1.0')[0], 1)
+
 
 if __name__ == '__main__':
     unittest.main()
