@@ -28,10 +28,12 @@ class TestGitPreReceiveHook(unittest.TestCase):
         code, old_git_user_name, _ = shell("git config --system user.name")
         cls.old_git_user_name = old_git_user if code == 0 else None
         shell("git config --system user.name %s" % name)
+        cls.git_user_name = name
 
         code, old_git_user_email, _ = shell("git config --system user.email")
         cls.old_git_user_email = old_git_user_email if code == 0 else None
         shell("git config --system user.email %s" % email)
+        cls.git_user_email = email
 
     @classmethod
     def _resumeGitConfig(cls):
@@ -66,13 +68,14 @@ class TestGitPreReceiveHook(unittest.TestCase):
         shell('ln -s %s/pre-receive %s.git/hooks/' % (SCRIPT_DIR, name))
         return repo_path
 
+    def _create_and_clone_git_repo(self, name):
+        repo_path = self._create_git_repo(name)
+        shell('git clone %s %s' % (repo_path, name))
+        os.chdir(name)
+
     def test_protect_master_branch(self):
 
-        # Init test bare repo and clone
-        work_dir_name = 'test1'
-        repo_path = self._create_git_repo(work_dir_name)
-        shell('git clone %s %s' % (repo_path, work_dir_name))
-        os.chdir(work_dir_name)
+        self._create_and_clone_git_repo('test1')
 
         # Nomal Push
         open('a', 'w').close()
@@ -92,6 +95,28 @@ class TestGitPreReceiveHook(unittest.TestCase):
         shell('git add c && git commit -m "c"')
         self.assertEqual(
             shell('git push -f origin master1:master')[0], 1)
+
+    def test_protect_release_tag(self):
+
+        self._create_and_clone_git_repo('test2')
+        open('a', 'w').close()
+        shell('git add a && git commit -m "a"')
+        open('b', 'w').close()
+        shell('git add b && git commit -m "b"')
+
+        # Nomal Push
+        shell('git config --local user.name %s' % self.git_user_name)
+        shell('git config --local user.email %s' % self.git_user_email)
+        shell('git tag -a 1.0.0 -m "1.0.0" master~1')
+        self.assertEqual(shell('git push --tags')[0], 0)
+
+        # Delete Release Tag
+        self.assertEqual(shell('git push -d origin 1.0.0')[0], 1)
+
+        # Force Push Release Tag
+        shell('git tag -d 1.0.0')
+        shell('git tag -a 1.0.0 -m "1.0.0" master')
+        self.assertEqual(shell('git push -f --tags')[0], 1)
 
 
 if __name__ == '__main__':
